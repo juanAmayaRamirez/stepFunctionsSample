@@ -1,0 +1,37 @@
+{
+  "Comment": "An example of the Amazon States Language using a choice state.",
+  "StartAt": "checkInventory",
+  "States": {
+    "checkInventory": {
+      "Type": "Task",
+      "Resource": "${LambdacheckInventory}",
+      "Next": "calculateTotal",
+      "Catch":[
+        {
+          "ErrorEquals":["BookOutOfStock"],
+          "Next":"BookOutOfStockError"
+        },
+        {
+          "ErrorEquals":["BookNotFound"],
+          "Next":"BookNotFoundError"
+        }
+      ],
+      "ResultPath": "$.book"
+    },
+    "calculateTotal": {
+      "Type" : "Task",
+      "Resource": "${LambdacalculateTotal}",
+      "End": true
+    },
+    "BookNotFoundError": {
+      "Type": "Pass",
+      "Result": "No such book available",
+      "End": true   
+    },
+    "BookOutOfStockError": {
+      "Type": "Pass",
+      "Result": "Sorry, the book is out of stock",
+      "End": true   
+    }
+  }
+}
