@@ -24,7 +24,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties: 
       RetentionInDays: 7
-  # statemachine role
+  # Statemachine IAM Role
   IAMRoleStateMachine:
     Type: AWS::IAM::Role
     Properties:
@@ -51,7 +51,7 @@ Resources:
                 Resource: 
                   - !GetAtt LambdacalculateTotal.Arn
                   - !GetAtt LambdacheckInventory.Arn
-  # lambdas role
+  # Lambdas IAM Role
   IAMRoleLambdas:
     Type: AWS::IAM::Role
     Properties:
@@ -91,7 +91,29 @@ Resources:
                     - ''
                     - - !GetAtt DynamoDBUsers.Arn
                       - /index/*
-        
+  # apigateway IAM Role
+  IAMRoleAPIGateway:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: BUPolicyForApiGateway
+          PolicyDocument: 
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartSyncExecution
+                Resource: !Ref StockTradingStateMachine
+
   StockTradingStateMachine:
     Type: AWS::Serverless::StateMachine # More info about State Machine Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-statemachine.html
     Properties:
@@ -141,6 +163,92 @@ Resources:
         Type: String
       TableName: userTable
 
+## The following are the resources for the apigateway direct integration with stepfunctions
+  APIGatewayRestAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub Apigateway-${ProjectName}
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+  APIGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref APIGatewayRestAPI
+      ParentId: !GetAtt APIGatewayRestAPI.RootResourceId
+      PathPart: book
+    DependsOn:
+      - APIGatewayRestAPI
+
+  APIGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: POST
+      ResourceId: !Ref APIGatewayResource
+      RestApiId: !Ref APIGatewayRestAPI
+      AuthorizationType: NONE
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: Empty
+        - StatusCode: 400
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Origin: true
+          ResponseModels:
+            application/json: Error
+      Integration:
+        Type: AWS
+        Uri: !Sub arn:${AWS::Partition}:apigateway:${AWS::Region}:states:action/StartSyncExecution
+        IntegrationHttpMethod: POST
+        Credentials: !GetAtt IAMRoleAPIGateway.Arn
+        PassthroughBehavior: NEVER
+        RequestTemplates:
+          application/json:
+            !Sub
+              - |
+                #set($body= $input.json('$'))
+                #set($inputRoot='{ "data" :'+$body+',"apiInfo":{"httpMethod" :"'+ $context.httpMethod+'", "apiKey":"'+ $context.identity.apiKey+'"}}')
+                #set($apiData=$util.escapeJavaScript($inputRoot))
+                #set($apiData=$apiData.replaceAll("\\'","'"))
+                {
+                  "input" :"$apiData",
+                  "stateMachineArn": "${STEPFUNCTION_ARN}"  
+                }
+              - STEPFUNCTION_ARN: !Ref StockTradingStateMachine
+        IntegrationResponses:
+          - StatusCode: 200
+            SelectionPattern: 2\d{2}
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Origin: '''*'''
+            ResponseTemplates:
+              application/json: |
+                #set ($bodyObj = $util.parseJson($input.body))
+                #if ($bodyObj.status == "SUCCEEDED")
+                    $bodyObj.output
+                #elseif ($bodyObj.status == "FAILED")
+                    #set($context.responseOverride.status = 500)
+                    {
+                        "cause": "$bodyObj.cause",
+                        "error": "$bodyObj.error"
+                    }
+                #else
+                    #set($context.responseOverride.status = 500)
+                    $input.body
+                #end
+        #   - StatusCode: 400
+        #     SelectionPattern: 4\d{2}
+    DependsOn:
+      - APIGatewayResource
+
+  APIGatewayDeployment:
+    Type: AWS::ApiGateway::Deployment
+    Properties:
+      RestApiId: !Ref APIGatewayRestAPI
+      StageName: !Ref Stage
+    DependsOn:
+      - APIGatewayMethod
 
 # Outputs:
 #   # StockTradingStateMachineHourlyTradingSchedule is an implicit Schedule event rule created out of Events key under Serverless::StateMachine
