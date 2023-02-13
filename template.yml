@@ -24,6 +24,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties: 
       RetentionInDays: 7
+  
   # Statemachine IAM Role
   IAMRoleStateMachine:
     Type: AWS::IAM::Role
@@ -51,6 +52,17 @@ Resources:
                 Resource: 
                   - !GetAtt LambdacalculateTotal.Arn
                   - !GetAtt LambdacheckInventory.Arn
+                  - !GetAtt LambdaPrepareOrder.Arn
+                  - !GetAtt LambdaBillCustomer.Arn
+                  - !GetAtt LambdaRedeemPoints.Arn
+                  - !GetAtt LambdaRestoreRedeemPoints.Arn
+              # - Effect: Allow
+              #   Action: sns:*
+              #   Resource: !GetAtt SNSTopic.TopicArn
+              - Effect: Allow
+                Action: sqs:*
+                Resource: '*'
+  
   # Lambdas IAM Role
   IAMRoleLambdas:
     Type: AWS::IAM::Role
@@ -80,6 +92,7 @@ Resources:
                   - dynamodb:Query
                   - dynamodb:BatchGetItem
                   - dynamodb:DescribeTable
+                  - dynamodb:UpdateItem
                 Resource: 
                   - !GetAtt DynamoDBInventory.Arn
                   - !Join 
@@ -91,6 +104,13 @@ Resources:
                     - ''
                     - - !GetAtt DynamoDBUsers.Arn
                       - /index/*
+              - Effect: Allow
+                Action: states:*
+                Resource: '*'
+              - Effect: Allow
+                Action: sqs:*
+                Resource: '*'
+  
   # apigateway IAM Role
   IAMRoleAPIGateway:
     Type: AWS::IAM::Role
@@ -123,6 +143,13 @@ Resources:
       DefinitionSubstitutions:
         LambdacheckInventory: !GetAtt LambdacheckInventory.Arn
         LambdacalculateTotal: !GetAtt LambdacalculateTotal.Arn
+        LambdaPrepareOrder: !GetAtt LambdaPrepareOrder.Arn
+        LambdaBillCustomer: !GetAtt LambdaBillCustomer.Arn
+        LambdaRedeemPoints: !GetAtt LambdaRedeemPoints.Arn
+        LambdaRestoreRedeemPoints: !GetAtt LambdaRestoreRedeemPoints.Arn
+        SQSQueueURL: !GetAtt SQSQueue.QueueUrl
+        LambdaRestoreQuantity: !GetAtt LambdaRestoreQuantity.Arn
+        # SNSTopic: !GetAtt SNSTopic.TopicArn
       Logging:
         # Loggroup destination logs
           Destinations: 
@@ -138,6 +165,38 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.9
       Role: !GetAtt IAMRoleLambdas.Arn
+  
+  LambdaPrepareOrder:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Properties:
+      CodeUri: functions/prepareOrderFunction/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt IAMRoleLambdas.Arn
+
+  LambdaBillCustomer:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Properties:
+      CodeUri: functions/billCustomerFunction/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt IAMRoleLambdas.Arn
+
+  LambdaRedeemPoints:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Properties:
+      CodeUri: functions/redeemPointsFunction/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt IAMRoleLambdas.Arn
+  
+  LambdaRestoreRedeemPoints:
+    Type: AWS::Serverless::Function # More info about Function Resource: https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-function.html
+    Properties:
+      CodeUri: functions/restoreRedeemPointsFunction/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt IAMRoleLambdas.Arn
 
   LambdacalculateTotal:
     Type: AWS::Serverless::Function
@@ -146,6 +205,35 @@ Resources:
       Handler: app.lambda_handler
       Runtime: python3.9
       Role: !GetAtt IAMRoleLambdas.Arn
+
+  LambdaRestoreQuantity:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/restoreQuantityFunction/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt IAMRoleLambdas.Arn
+
+  LambdaSqsWorker:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/sqsWorkerFunction/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt IAMRoleLambdas.Arn
+      Events:
+        sqsEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt SQSQueue.Arn
+            BatchSize: 1
+
+  # SNSTopic:
+  #   Type: AWS::SNS::Topic
+  #   Properties:
+  #     Subscription:
+  #       - Endpoint: someManageremail@email.com
+  #         Protocol: Email
 
   DynamoDBInventory:
     Type: AWS::Serverless::SimpleTable
@@ -163,6 +251,9 @@ Resources:
         Type: String
       TableName: userTable
 
+  SQSQueue:
+    Type: AWS::SQS::Queue
+
 ## The following are the resources for the apigateway direct integration with stepfunctions
   APIGatewayRestAPI:
     Type: AWS::ApiGateway::RestApi
@@ -171,6 +262,7 @@ Resources:
       EndpointConfiguration:
         Types:
           - REGIONAL
+  
   APIGatewayResource:
     Type: AWS::ApiGateway::Resource
     Properties:
@@ -249,17 +341,3 @@ Resources:
       StageName: !Ref Stage
     DependsOn:
       - APIGatewayMethod
-
-# Outputs:
-#   # StockTradingStateMachineHourlyTradingSchedule is an implicit Schedule event rule created out of Events key under Serverless::StateMachine
-#   # Find out more about other implicit resources you can reference within SAM
-#   # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-specification-generated-resources.html
-#   StockTradingStateMachineArn:
-#     Description: "Stock Trading state machine ARN"
-#     Value: !Ref StockTradingStateMachine
-#   StockTradingStateMachineRole:
-#     Description: "IAM Role created for Stock Trading state machine based on the specified SAM Policy Templates"
-#     Value: !GetAtt StockTradingStateMachineRole.Arn
-#   WebEndpoint:
-#     Description: "API Gateway endpoint URL for Prod stage"
-#     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"

@@ -21,7 +21,89 @@
     "calculateTotal": {
       "Type" : "Task",
       "Resource": "${LambdacalculateTotal}",
+      "ResultPath": "$.total",
+      "Next": "isRedeemNeeded"
+    },
+    "isRedeemNeeded":{
+      "Type" : "Choice",
+      "Choices": [
+        {
+          "Variable": "$.data.redeem",
+          "BooleanEquals": true,
+          "Next": "RedeemPoints"
+        }
+      ],
+      "Default": "BillCustomer"
+    },
+    "RedeemPoints":{
+      "Type":"Task",
+      "Resource":"${LambdaRedeemPoints}",
+      "Next": "BillCustomer",
+      "Catch":[
+        {
+          "ErrorEquals":["States.ALL"],
+          "Next":"RedeemPointsError"
+        }
+      ],
+      "ResultPath":"$.total"
+    },
+    "BillCustomer":{
+      "Type":"Task",
+      "Resource":"${LambdaBillCustomer}",
+      "ResultPath":"$.billingStatus",
+      "Retry":[
+        {
+          "ErrorEquals": ["States.ALL"],
+          "MaxAttempts": 3
+        }
+      ],
+      "Catch":[
+        {
+          "ErrorEquals":["States.ALL"],
+          "ResultPath": "$.customerBilling",
+          "Next":"BillingError"
+        }
+      ],
+      "Next": "PrepareOrder"
+    },
+    "PrepareOrder": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters":{
+        "QueueUrl":"${SQSQueueURL}",
+        "MessageBody.$":"$"
+      },
+      "ResultPath": "$.courierStatus",
+      "Catch":[
+        {
+          "ErrorEquals":["NoCourierAvailable"],
+          "ResultPath": "$.courierError",
+          "Next":"RefundCustomer"
+        }
+      ],
+      "Next": "DispatchOrder"
+    },
+    "DispatchOrder":{
+      "Type": "Pass",
+      "Result":"Dispatching order",
+      "Next": "Dispatched"
+    },
+    "Dispatched":{
+      "Type": "Pass",
+      "Result":"Your order will be dispatched in 24 hours",
       "End": true
+    },
+    "RefundCustomer":{
+      "Type": "Pass",
+      "Result":"Customer is refunded",
+      "ResultPath": "$.refundStatus",
+      "Next":"RestoreQuantity"
+    },
+    "RestoreQuantity":{
+      "Type":"Task",
+      "Resource":"${LambdaRestoreQuantity}",
+      "ResultPath": "$.quantityRestoreStatus",
+      "Next": "RestoreRedeemPoints"
     },
     "BookNotFoundError": {
       "Type": "Pass",
@@ -32,6 +114,22 @@
       "Type": "Pass",
       "Result": "Sorry, the book is out of stock",
       "End": true   
+    },
+    "RedeemPointsError":{
+      "Type":"Pass",
+      "Result":"Error Redeeming Points",
+      "End": true
+    },
+    "BillingError":{
+      "Type":"Pass",
+      "Result":"Error Billing Customer",
+      "ResultPath": "$.billingStatus",
+      "Next": "RestoreRedeemPoints"
+    },
+    "RestoreRedeemPoints":{
+      "Type":"Task",
+      "Resource":"${LambdaRestoreRedeemPoints}",
+      "End": true
     }
   }
 }

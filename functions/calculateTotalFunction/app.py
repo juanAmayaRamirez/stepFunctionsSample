@@ -1,7 +1,5 @@
 import json
 
 def lambda_handler(event, context):
-    return{
-        "statusCode":200,
-        "body": json.dumps('here is the total')
-    }
+    total=event['book']['price']*event['data']['quantity']
+    return {"total":total}
